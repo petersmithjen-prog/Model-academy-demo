@@ -1,0 +1,8 @@
+{
+  "name": "Model Academy, Mirpur, Dhaka",
+  "description": "Official public website for Model Academy, Mirpur, Dhaka (মডেল একাডেমী, মিরপুর, ঢাকা), established in 1978.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

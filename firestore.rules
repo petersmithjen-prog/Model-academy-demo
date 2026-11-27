@@ -1,0 +1,604 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global Safety Net: Default Deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function currentUserDoc() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function hasUserDoc() {
+      return isSignedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function isAdmin() {
+      return hasUserDoc() && currentUserDoc().data.role == 'admin';
+    }
+
+    function isGuardianUser() {
+      return hasUserDoc() && currentUserDoc().data.role == 'guardian';
+    }
+
+    function isStudentUser() {
+      return hasUserDoc() && currentUserDoc().data.role == 'student';
+    }
+
+    function isApprovedTeacher() {
+      return hasUserDoc()
+        && currentUserDoc().data.role == 'teacher'
+        && currentUserDoc().data.approved == true;
+    }
+
+    function teacherTeachesClass(studentClass) {
+      return isApprovedTeacher()
+        && ('classes' in currentUserDoc().data)
+        && studentClass in currentUserDoc().data.classes;
+    }
+
+    function isStudentSelfKey(studentKey) {
+      return isStudentUser()
+        && ('studentKey' in currentUserDoc().data)
+        && currentUserDoc().data.studentKey == studentKey;
+    }
+
+    function isApprovedGuardianForKey(studentKey) {
+      return isGuardianUser()
+        && exists(/databases/$(database)/documents/guardianLinks/$(request.auth.uid + '__' + studentKey))
+        && get(/databases/$(database)/documents/guardianLinks/$(request.auth.uid + '__' + studentKey)).data.active == true;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function studentRegistryId(data) {
+      return data.class.trim().lower().replace('[^a-z0-9]+', '-')
+        + '__'
+        + data.roll.trim().lower().replace('[^a-z0-9]+', '-')
+        + '__'
+        + data.studentId.trim().lower().replace('[^a-z0-9]+', '-');
+    }
+
+    function isValidPhone(phone) {
+      return phone is string && phone.size() == 11 && phone.matches('^01[0-9]{9}$');
+    }
+
+    function isValidEmail(email) {
+      return email is string && email.size() >= 5 && email.size() <= 160 && email.matches('^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$');
+    }
+
+    function isValidDateString(d) {
+      return d is string && d.size() == 10 && d.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$');
+    }
+
+    function isValidStudentKey(key) {
+      return key is string && key.size() >= 5 && key.size() <= 128 && key.matches('^[a-z0-9_\\-]+$');
+    }
+
+    function isValidChildItem(child) {
+      return child is map
+        && child.keys().hasAll(['name', 'roll', 'studentId', 'class', 'section', 'linkStatus'])
+        && child.keys().hasOnly(['name', 'roll', 'studentId', 'class', 'section', 'linkStatus'])
+        && child.name is string && child.name.size() >= 2 && child.name.size() <= 120
+        && child.roll is string && child.roll.size() >= 1 && child.roll.size() <= 30
+        && child.studentId is string && child.studentId.size() >= 1 && child.studentId.size() <= 40
+        && child.class is string && child.class.size() >= 1 && child.class.size() <= 40
+        && child.section is string && child.section.size() >= 1 && child.section.size() <= 40
+        && child.linkStatus == 'pending';
+    }
+
+    function isValidStudentFields(data) {
+      return data.keys().hasAll([
+          'role', 'name', 'roll', 'studentId', 'class', 'section', 'phone', 'email', 'studentKey', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'role', 'name', 'roll', 'studentId', 'class', 'section', 'phone', 'email', 'studentKey', 'createdAt'
+        ])
+        && data.role == 'student'
+        && data.name is string && data.name.size() >= 2 && data.name.size() <= 120
+        && data.roll is string && data.roll.size() >= 1 && data.roll.size() <= 30
+        && data.studentId is string && data.studentId.size() >= 1 && data.studentId.size() <= 40
+        && data.class is string && data.class.size() >= 1 && data.class.size() <= 40
+        && data.section is string && data.section.size() >= 1 && data.section.size() <= 40
+        && isValidPhone(data.phone)
+        && isValidEmail(data.email)
+        && data.studentKey is string
+        && data.studentKey == studentRegistryId(data);
+    }
+
+    function isValidGuardianFields(data) {
+      return data.keys().hasAll([
+          'role', 'name', 'phone', 'email', 'children', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'role', 'name', 'phone', 'email', 'children', 'createdAt'
+        ])
+        && data.role == 'guardian'
+        && data.name is string && data.name.size() >= 2 && data.name.size() <= 120
+        && isValidPhone(data.phone)
+        && isValidEmail(data.email)
+        && data.children is list
+        && data.children.size() >= 1
+        && data.children.size() <= 6
+        && isValidChildItem(data.children[0])
+        && (data.children.size() < 2 || isValidChildItem(data.children[1]))
+        && (data.children.size() < 3 || isValidChildItem(data.children[2]))
+        && (data.children.size() < 4 || isValidChildItem(data.children[3]))
+        && (data.children.size() < 5 || isValidChildItem(data.children[4]))
+        && (data.children.size() < 6 || isValidChildItem(data.children[5]));
+    }
+
+    function isValidTeacherFields(data) {
+      return data.keys().hasAll([
+          'role', 'approved', 'name', 'phone', 'email', 'designation', 'subjects', 'classes', 'employeeId', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'role', 'approved', 'name', 'phone', 'email', 'designation', 'subjects', 'classes', 'employeeId', 'createdAt'
+        ])
+        && data.role == 'teacher'
+        && data.approved is bool
+        && data.name is string && data.name.size() >= 2 && data.name.size() <= 120
+        && isValidPhone(data.phone)
+        && isValidEmail(data.email)
+        && data.designation is string && data.designation.size() >= 2 && data.designation.size() <= 80
+        && data.subjects is string && data.subjects.size() >= 1 && data.subjects.size() <= 200
+        && data.classes is list
+        && data.classes.size() >= 1
+        && data.classes.size() <= 20
+        && data.classes[0] is string && data.classes[0].size() >= 1 && data.classes[0].size() <= 40
+        && data.employeeId is string && data.employeeId.size() <= 40;
+    }
+
+    function isValidUserCreate(data) {
+      return data.createdAt == request.time
+        && data.role != 'admin'
+        && (
+          (isValidStudentFields(data) && existsAfter(/databases/$(database)/documents/studentRegistry/$(studentRegistryId(data))))
+          || isValidGuardianFields(data)
+          || (isValidTeacherFields(data) && data.approved == false)
+        );
+    }
+
+    function isValidStudentRegistryCreate(data) {
+      return data.keys().hasAll(['uid', 'createdAt'])
+        && data.keys().hasOnly(['uid', 'createdAt'])
+        && data.uid is string
+        && data.uid == request.auth.uid
+        && data.createdAt == request.time;
+    }
+
+    function isValidStudentRoster(data, pathStudentKey) {
+      return data.keys().hasAll([
+          'studentKey', 'uid', 'name', 'roll', 'studentId', 'class', 'section', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'studentKey', 'uid', 'name', 'roll', 'studentId', 'class', 'section', 'updatedAt'
+        ])
+        && isValidStudentKey(data.studentKey)
+        && data.studentKey == pathStudentKey
+        && data.studentKey == studentRegistryId(data)
+        && isValidId(data.uid)
+        && data.name is string && data.name.size() >= 2 && data.name.size() <= 120
+        && data.roll is string && data.roll.size() >= 1 && data.roll.size() <= 30
+        && data.studentId is string && data.studentId.size() >= 1 && data.studentId.size() <= 40
+        && data.class is string && data.class.size() >= 1 && data.class.size() <= 40
+        && data.section is string && data.section.size() >= 1 && data.section.size() <= 40
+        && data.updatedAt == request.time;
+    }
+
+    function isValidLinkRequest(data) {
+      return data.keys().hasAll([
+          'guardianUid', 'guardianName', 'guardianPhone', 'studentKey', 'status', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'guardianUid', 'guardianName', 'guardianPhone', 'studentKey', 'status', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.guardianUid)
+        && data.guardianName is string && data.guardianName.size() >= 2 && data.guardianName.size() <= 120
+        && isValidPhone(data.guardianPhone)
+        && isValidStudentKey(data.studentKey)
+        && data.status in ['pending', 'approved', 'rejected', 'revoked'];
+    }
+
+    function isValidGuardianLinkGrant(data, linkId) {
+      return data.keys().hasAll(['guardianUid', 'studentKey', 'requestId', 'active', 'updatedAt'])
+        && data.keys().hasOnly(['guardianUid', 'studentKey', 'requestId', 'active', 'updatedAt'])
+        && isValidId(data.guardianUid)
+        && isValidStudentKey(data.studentKey)
+        && linkId == (data.guardianUid + '__' + data.studentKey)
+        && isValidId(data.requestId)
+        && data.active is bool
+        && data.updatedAt == request.time;
+    }
+
+    function isValidAttendance(data, pathStudentKey) {
+      return data.keys().hasAll([
+          'studentKey', 'studentClass', 'studentSection', 'date', 'status', 'teacherUid', 'teacherName', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'studentKey', 'studentClass', 'studentSection', 'date', 'status', 'teacherUid', 'teacherName', 'updatedAt'
+        ])
+        && data.studentKey == pathStudentKey
+        && isValidStudentKey(data.studentKey)
+        && data.studentClass is string && data.studentClass.size() >= 1 && data.studentClass.size() <= 40
+        && data.studentSection is string && data.studentSection.size() >= 1 && data.studentSection.size() <= 40
+        && isValidDateString(data.date)
+        && data.status in ['present', 'absent', 'late']
+        && data.teacherUid == request.auth.uid
+        && data.teacherName is string && data.teacherName.size() >= 2 && data.teacherName.size() <= 120
+        && data.updatedAt == request.time;
+    }
+
+    function isValidResult(data, pathStudentKey) {
+      return data.keys().hasAll([
+          'studentKey', 'studentClass', 'studentSection', 'examName', 'subject', 'marks', 'fullMarks', 'grade', 'teacherUid', 'teacherName', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'studentKey', 'studentClass', 'studentSection', 'examName', 'subject', 'marks', 'fullMarks', 'grade', 'teacherUid', 'teacherName', 'updatedAt'
+        ])
+        && data.studentKey == pathStudentKey
+        && isValidStudentKey(data.studentKey)
+        && data.studentClass is string && data.studentClass.size() >= 1 && data.studentClass.size() <= 40
+        && data.studentSection is string && data.studentSection.size() >= 1 && data.studentSection.size() <= 40
+        && data.examName is string && data.examName.size() >= 1 && data.examName.size() <= 80
+        && data.subject is string && data.subject.size() >= 1 && data.subject.size() <= 80
+        && data.marks is number && data.marks >= 0 && data.marks <= 10000
+        && data.fullMarks is number && data.fullMarks > 0 && data.fullMarks <= 10000 && data.marks <= data.fullMarks
+        && data.grade is string && data.grade.size() >= 1 && data.grade.size() <= 10
+        && data.teacherUid == request.auth.uid
+        && data.teacherName is string && data.teacherName.size() >= 2 && data.teacherName.size() <= 120
+        && data.updatedAt == request.time;
+    }
+
+    function isValidTeacherNote(data, pathStudentKey) {
+      return data.keys().hasAll([
+          'studentKey', 'studentClass', 'studentSection', 'text', 'date', 'category', 'teacherUid', 'teacherName', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'studentKey', 'studentClass', 'studentSection', 'text', 'date', 'category', 'teacherUid', 'teacherName', 'createdAt'
+        ])
+        && data.studentKey == pathStudentKey
+        && isValidStudentKey(data.studentKey)
+        && data.studentClass is string && data.studentClass.size() >= 1 && data.studentClass.size() <= 40
+        && data.studentSection is string && data.studentSection.size() >= 1 && data.studentSection.size() <= 40
+        && data.text is string && data.text.size() >= 1 && data.text.size() <= 1500
+        && isValidDateString(data.date)
+        && data.category is string && data.category.size() <= 40
+        && data.teacherUid == request.auth.uid
+        && data.teacherName is string && data.teacherName.size() >= 2 && data.teacherName.size() <= 120
+        && data.createdAt == request.time;
+    }
+
+    function isValidHomework(data, pathStudentKey) {
+      return data.keys().hasAll([
+          'studentKey', 'studentClass', 'studentSection', 'subject', 'text', 'dueDate', 'teacherUid', 'teacherName', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'studentKey', 'studentClass', 'studentSection', 'subject', 'text', 'dueDate', 'teacherUid', 'teacherName', 'createdAt'
+        ])
+        && data.studentKey == pathStudentKey
+        && isValidStudentKey(data.studentKey)
+        && data.studentClass is string && data.studentClass.size() >= 1 && data.studentClass.size() <= 40
+        && data.studentSection is string && data.studentSection.size() >= 1 && data.studentSection.size() <= 40
+        && data.subject is string && data.subject.size() >= 1 && data.subject.size() <= 80
+        && data.text is string && data.text.size() >= 1 && data.text.size() <= 1500
+        && isValidDateString(data.dueDate)
+        && data.teacherUid == request.auth.uid
+        && data.teacherName is string && data.teacherName.size() >= 2 && data.teacherName.size() <= 120
+        && data.createdAt == request.time;
+    }
+
+    function isValidNotice(data) {
+      return data.keys().hasAll(['title', 'text', 'date', 'authorUid', 'createdAt'])
+        && data.keys().hasOnly(['title', 'text', 'date', 'authorUid', 'createdAt'])
+        && data.title is string && data.title.size() >= 2 && data.title.size() <= 160
+        && data.text is string && data.text.size() >= 2 && data.text.size() <= 3000
+        && isValidDateString(data.date)
+        && data.authorUid == request.auth.uid
+        && data.createdAt == request.time;
+    }
+
+    match /users/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isOwner(userId)
+        && isValidId(userId)
+        && isValidUserCreate(incoming());
+      allow update: if isValidId(userId)
+        && incoming().role == existing().role
+        && incoming().email == existing().email
+        && incoming().createdAt == existing().createdAt
+        && (
+          // Action 1: Owner updating allowed profile fields for their own role
+          (
+            isOwner(userId) && (
+              (
+                existing().role == 'student'
+                && isValidStudentFields(incoming())
+                && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'roll', 'studentId', 'class', 'section', 'phone', 'studentKey'])
+                && (
+                  studentRegistryId(incoming()) == studentRegistryId(existing())
+                  || existsAfter(/databases/$(database)/documents/studentRegistry/$(studentRegistryId(incoming())))
+                )
+              )
+              || (
+                existing().role == 'guardian'
+                && isValidGuardianFields(incoming())
+                && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'phone', 'children'])
+              )
+              || (
+                existing().role == 'teacher'
+                && existing().approved == true
+                && incoming().approved == existing().approved
+                && isValidTeacherFields(incoming())
+                && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'phone', 'designation', 'subjects', 'classes', 'employeeId'])
+              )
+            )
+          )
+          // Action 2: Admin approving or rejecting teacher access
+          || (
+            isAdmin()
+            && existing().role == 'teacher'
+            && isValidTeacherFields(incoming())
+            && incoming().diff(existing()).affectedKeys().hasOnly(['approved'])
+          )
+        );
+      allow delete: if false;
+    }
+
+    match /studentRegistry/{registryKey} {
+      allow get: if isSignedIn() && isValidId(registryKey);
+      allow list: if false;
+      allow create: if isSignedIn()
+        && isValidId(registryKey)
+        && isValidStudentRegistryCreate(incoming());
+      allow update: if false;
+      allow delete: if isSignedIn()
+        && isValidId(registryKey)
+        && existing().uid == request.auth.uid;
+    }
+
+    match /studentRoster/{studentKey} {
+      allow get: if isSignedIn()
+        && isValidId(studentKey)
+        && (
+          resource.data.uid == request.auth.uid
+          || teacherTeachesClass(resource.data.class)
+          || isAdmin()
+        );
+      allow list: if isSignedIn()
+        && (
+          isAdmin()
+          || teacherTeachesClass(resource.data.class)
+        );
+      allow create, update: if isSignedIn()
+        && isValidId(studentKey)
+        && isValidStudentRoster(incoming(), studentKey)
+        && (incoming().uid == request.auth.uid || isAdmin());
+      allow delete: if isSignedIn()
+        && isValidId(studentKey)
+        && (existing().uid == request.auth.uid || isAdmin());
+    }
+
+    match /linkRequests/{requestId} {
+      allow get: if isSignedIn()
+        && isValidId(requestId)
+        && (
+          resource.data.guardianUid == request.auth.uid
+          || isStudentSelfKey(resource.data.studentKey)
+          || isAdmin()
+        );
+      allow list: if isSignedIn()
+        && (
+          resource.data.guardianUid == request.auth.uid
+          || isStudentSelfKey(resource.data.studentKey)
+          || isAdmin()
+        );
+      allow create: if isSignedIn()
+        && isValidId(requestId)
+        && isValidLinkRequest(incoming())
+        && incoming().guardianUid == request.auth.uid
+        && incoming().status == 'pending'
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && isGuardianUser();
+      allow update: if isSignedIn()
+        && isValidId(requestId)
+        && isValidLinkRequest(incoming())
+        && incoming().guardianUid == existing().guardianUid
+        && incoming().guardianName == existing().guardianName
+        && incoming().guardianPhone == existing().guardianPhone
+        && incoming().studentKey == existing().studentKey
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
+        && (
+          incoming().status != 'approved'
+          || getAfter(/databases/$(database)/documents/guardianLinks/$(existing().guardianUid + '__' + existing().studentKey)).data.active == true
+        )
+        && (
+          existing().status != 'approved'
+          || incoming().status == 'approved'
+          || getAfter(/databases/$(database)/documents/guardianLinks/$(existing().guardianUid + '__' + existing().studentKey)).data.active == false
+        )
+        && (
+          // Student acting on a request matching their own studentKey
+          (
+            isStudentSelfKey(existing().studentKey)
+            && (
+              (existing().status == 'pending' && incoming().status in ['approved', 'rejected'])
+              || (existing().status == 'approved' && incoming().status == 'revoked')
+            )
+          )
+          // Admin overriding request status
+          || (
+            isAdmin()
+            && incoming().status in ['pending', 'approved', 'rejected', 'revoked']
+          )
+        );
+      allow delete: if false;
+    }
+
+    match /guardianLinks/{linkId} {
+      allow get: if isSignedIn()
+        && isValidId(linkId)
+        && (
+          resource.data.guardianUid == request.auth.uid
+          || isStudentSelfKey(resource.data.studentKey)
+          || isAdmin()
+        );
+      allow list: if isAdmin();
+      allow create, update: if isSignedIn()
+        && isValidId(linkId)
+        && isValidGuardianLinkGrant(incoming(), linkId)
+        && (isStudentSelfKey(incoming().studentKey) || isAdmin())
+        && exists(/databases/$(database)/documents/linkRequests/$(incoming().requestId))
+        && get(/databases/$(database)/documents/linkRequests/$(incoming().requestId)).data.guardianUid == incoming().guardianUid
+        && get(/databases/$(database)/documents/linkRequests/$(incoming().requestId)).data.studentKey == incoming().studentKey;
+      allow delete: if false;
+    }
+
+    match /studentRecords/{studentKey} {
+      match /attendance/{dateKey} {
+        allow get: if isSignedIn()
+          && isValidId(studentKey)
+          && isValidId(dateKey)
+          && (
+            isAdmin()
+            || isStudentSelfKey(studentKey)
+            || isApprovedGuardianForKey(studentKey)
+            || teacherTeachesClass(resource.data.studentClass)
+          );
+        allow list: if isSignedIn()
+          && isValidId(studentKey)
+          && (
+            isAdmin()
+            || isStudentSelfKey(studentKey)
+            || isApprovedGuardianForKey(studentKey)
+            || teacherTeachesClass(resource.data.studentClass)
+          );
+        allow create, update: if isSignedIn()
+          && isValidId(studentKey)
+          && isValidId(dateKey)
+          && dateKey == incoming().date
+          && isValidAttendance(incoming(), studentKey)
+          && (isAdmin() || teacherTeachesClass(incoming().studentClass))
+          && exists(/databases/$(database)/documents/studentRoster/$(studentKey));
+        allow delete: if isAdmin() && isValidId(studentKey) && isValidId(dateKey);
+      }
+
+      match /results/{resultId} {
+        allow get: if isSignedIn()
+          && isValidId(studentKey)
+          && isValidId(resultId)
+          && (
+            isAdmin()
+            || isStudentSelfKey(studentKey)
+            || isApprovedGuardianForKey(studentKey)
+            || teacherTeachesClass(resource.data.studentClass)
+          );
+        allow list: if isSignedIn()
+          && isValidId(studentKey)
+          && (
+            isAdmin()
+            || isStudentSelfKey(studentKey)
+            || isApprovedGuardianForKey(studentKey)
+            || teacherTeachesClass(resource.data.studentClass)
+          );
+        allow create, update: if isSignedIn()
+          && isValidId(studentKey)
+          && isValidId(resultId)
+          && isValidResult(incoming(), studentKey)
+          && (isAdmin() || teacherTeachesClass(incoming().studentClass))
+          && exists(/databases/$(database)/documents/studentRoster/$(studentKey));
+        allow delete: if isAdmin() && isValidId(studentKey) && isValidId(resultId);
+      }
+
+      match /notes/{noteId} {
+        allow get: if isSignedIn()
+          && isValidId(studentKey)
+          && isValidId(noteId)
+          && (
+            isAdmin()
+            || isStudentSelfKey(studentKey)
+            || isApprovedGuardianForKey(studentKey)
+            || teacherTeachesClass(resource.data.studentClass)
+          );
+        allow list: if isSignedIn()
+          && isValidId(studentKey)
+          && (
+            isAdmin()
+            || isStudentSelfKey(studentKey)
+            || isApprovedGuardianForKey(studentKey)
+            || teacherTeachesClass(resource.data.studentClass)
+          );
+        allow create: if isSignedIn()
+          && isValidId(studentKey)
+          && isValidId(noteId)
+          && isValidTeacherNote(incoming(), studentKey)
+          && (isAdmin() || teacherTeachesClass(incoming().studentClass))
+          && exists(/databases/$(database)/documents/studentRoster/$(studentKey));
+        allow update: if false;
+        allow delete: if isAdmin() && isValidId(studentKey) && isValidId(noteId);
+      }
+
+      match /homework/{homeworkId} {
+        allow get: if isSignedIn()
+          && isValidId(studentKey)
+          && isValidId(homeworkId)
+          && (
+            isAdmin()
+            || isStudentSelfKey(studentKey)
+            || isApprovedGuardianForKey(studentKey)
+            || teacherTeachesClass(resource.data.studentClass)
+          );
+        allow list: if isSignedIn()
+          && isValidId(studentKey)
+          && (
+            isAdmin()
+            || isStudentSelfKey(studentKey)
+            || isApprovedGuardianForKey(studentKey)
+            || teacherTeachesClass(resource.data.studentClass)
+          );
+        allow create, update: if isSignedIn()
+          && isValidId(studentKey)
+          && isValidId(homeworkId)
+          && isValidHomework(incoming(), studentKey)
+          && (isAdmin() || teacherTeachesClass(incoming().studentClass))
+          && exists(/databases/$(database)/documents/studentRoster/$(studentKey));
+        allow delete: if isAdmin() && isValidId(studentKey) && isValidId(homeworkId);
+      }
+    }
+
+    match /notices/{noticeId} {
+      allow get: if isSignedIn() && isValidId(noticeId);
+      allow list: if isSignedIn();
+      allow create: if isAdmin() && isValidId(noticeId) && isValidNotice(incoming());
+      allow update: if isAdmin()
+        && isValidId(noticeId)
+        && isValidNotice(incoming())
+        && incoming().createdAt == existing().createdAt;
+      allow delete: if isAdmin() && isValidId(noticeId);
+    }
+  }
+}
